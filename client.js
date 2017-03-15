@@ -14,26 +14,13 @@ const Detector = snowboy.Detector
 const Models = snowboy.Models
 const models = new Models()
 const witToken = 'UBBQSYVZACKPUKF5J7B3ZHGYDP7H45E3'
-
+const sleep = require('sleep');
 let is_recognizing = false
 
 models.add({
     file: './resources/Brain.pmdl',
     sensitivity: '0.5',
     hotwords: 'brain'
-})
-
-const detector = new Detector({
-    resource: './resources/common.res',
-    models,
-    audioGain: 1.0
-})
-
-const hotword = thunkify.event(detector, 'hotword')
-
-const hotword_recorder = record.start({
-    threshold: 0,
-    verbose: false
 })
 
 function * parseResult(body) {
@@ -81,7 +68,7 @@ function make_callback(deferred) {
 
 function recognizer(callback) {
     rec.start({
-        encoding: 'LINEAR16'
+	recordProgram: 'arecord'
     }).pipe(request.post({
         url: 'https://api.wit.ai/speech?client=chromium&lang=en-us&v=20160526',
         headers: {
@@ -91,6 +78,10 @@ function recognizer(callback) {
             'Transfer-encoding': 'chunked'
         }
     }, callback))
+    // Stop recording after three seconds 
+    setTimeout(function () {
+	rec.stop()
+    }, 3000)
 }
 
 function * start_recognition() {
@@ -103,14 +94,45 @@ function * start_recognition() {
 }
 
 function * start_hotword_detection() {
-    try {
-        yield hotword()
-        yield speak.vocalize_affirm()
-        yield start_recognition()
-        yield start_hotword_detection()
-    } catch (err) {
-        console.log(err)
-        throw err
+    var hotword_detected = false;
+    
+    while (1) {
+	hotword_detected = false;
+
+	var detector = new Detector({
+	    resource: './resources/common.res',
+	    models,
+	    audioGain: 2.0
+	})
+
+	detector.on('hotword', function () {
+	    hotword_detected = true;
+	    record.stop()
+	})
+
+	const end = thunkify.event(detector, 'finish');
+
+	try {
+	    record.start({
+		threshold: 0,
+		verbose: false
+	    }).pipe(detector)
+
+	    // wait for record to end before starting next record process
+            yield end()
+
+	    // check to make sure we detected the hotword
+	    if ( hotword_detected ) {
+		yield speak.vocalize_affirm()
+		yield start_recognition()
+	    } else {
+		// something went wrong, sleep then try again
+		sleep.sleep(5)
+	    }
+	} catch (err) {
+            console.log(err)
+            throw err
+	}
     }
 }
 
@@ -126,7 +148,7 @@ function console_input(query) {
 }
 
 stdin.addListener('data', console_input)
-hotword_recorder.pipe(detector)
+// hotword_recorder.pipe(detector)
 
 co(function * () {
     console.log('P-Brain Says: Say \'Hey Brain\',\'Brain\' or \'Okay Brain\' followed by your command!')
